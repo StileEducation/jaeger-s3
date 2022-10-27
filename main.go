@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/johanneswuerbach/jaeger-s3/plugin"
 	pConfig "github.com/johanneswuerbach/jaeger-s3/plugin/config"
@@ -41,6 +42,14 @@ func main() {
 	if err := viper.BindPFlags(pflag.CommandLine); err != nil {
 		log.Fatalf("unable bind flags, %v", err)
 	}
+
+	// Allow overriding config with environment variables.
+	viper.AutomaticEnv()
+
+	// Use `_` as the nested key separator, rather than `.` as most
+	// shells don't support `.`
+	dotToUnderscoreReplacer := strings.NewReplacer(".", "_")
+	viper.SetEnvKeyReplacer(dotToUnderscoreReplacer)
 
 	if configPath != "" {
 		viper.SetConfigFile(configPath)
