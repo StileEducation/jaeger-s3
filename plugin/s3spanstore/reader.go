@@ -202,6 +202,11 @@ func (r *Reader) FindTraces(ctx context.Context, query *spanstore.TraceQueryPara
 		return nil, fmt.Errorf("failed to query trace ids: %w", err)
 	}
 
+	// Short-circuit if we don't find any matching traces.
+	if len(traceIDs) == 0 {
+		return []*model.Trace{}, nil
+	}
+
 	if query.StartTimeMin.IsZero() {
 		query.StartTimeMin = r.DefaultMinTime()
 	}
