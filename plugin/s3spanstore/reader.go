@@ -133,22 +133,22 @@ func (s *Reader) GetServices(ctx context.Context) ([]string, error) {
 	otSpan, _ := opentracing.StartSpanFromContext(ctx, "GetServices")
 	defer otSpan.Finish()
 
-	result, err := s.getServicesAndOperations(ctx)
+	conditions := []string{
+		fmt.Sprintf(`datehour BETWEEN '%s' AND '%s'`, s.DefaultMinTime().Format(PARTION_FORMAT), s.DefaultMaxTime().Format(PARTION_FORMAT)),
+	}
+
+	result, err := s.queryAthenaCached(
+		ctx,
+		fmt.Sprintf(`SELECT distinct service_name FROM "%s" WHERE %s`, s.cfg.OperationsTableName, strings.Join(conditions, " AND ")),
+		s.servicesQueryTTL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query services and operations: %w", err)
+		return nil, fmt.Errorf("failed to query athena: %w", err)
 	}
 
-	serviceNameMap := map[string]bool{}
-	for _, v := range result {
+	serviceNames := make([]string, len(result))
+	for i, v := range result {
 		serviceName := *v.Data[0].VarCharValue
-		if !serviceNameMap[serviceName] {
-			serviceNameMap[serviceName] = true
-		}
-	}
-
-	serviceNames := make([]string, 0, len(serviceNameMap))
-	for serviceName := range serviceNameMap {
-		serviceNames = append(serviceNames, serviceName)
+		serviceNames[i] = serviceName
 	}
 
 	return serviceNames, nil
@@ -159,44 +159,36 @@ func (s *Reader) GetOperations(ctx context.Context, query spanstore.OperationQue
 	span, _ := opentracing.StartSpanFromContext(ctx, "GetOperations")
 	defer span.Finish()
 
-	result, err := s.getServicesAndOperations(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query services and operations: %w", err)
-	}
-
-	operations := []spanstore.Operation{}
-	for _, v := range result {
-		if query.ServiceName != *v.Data[0].VarCharValue {
-			continue
-		}
-
-		if query.SpanKind != "" && query.SpanKind != *v.Data[2].VarCharValue {
-			continue
-		}
-
-		operations = append(operations, spanstore.Operation{
-			Name:     *v.Data[1].VarCharValue,
-			SpanKind: *v.Data[2].VarCharValue,
-		})
-	}
-
-	return operations, nil
-}
-
-func (r *Reader) getServicesAndOperations(ctx context.Context) ([]types.Row, error) {
 	conditions := []string{
-		fmt.Sprintf(`datehour BETWEEN '%s' AND '%s'`, r.DefaultMinTime().Format(PARTION_FORMAT), r.DefaultMaxTime().Format(PARTION_FORMAT)),
+		fmt.Sprintf(`service_name = '%s'`, query.ServiceName),
+		fmt.Sprintf(`datehour BETWEEN '%s' AND '%s'`, s.DefaultMinTime().Format(PARTION_FORMAT), s.DefaultMaxTime().Format(PARTION_FORMAT)),
+	}
+	if query.SpanKind != "" {
+		conditions = append(conditions, fmt.Sprintf(`span_kind = '%s'`, query.SpanKind))
 	}
 
-	result, err := r.queryAthenaCached(
+	result, err := s.queryAthenaCached(
 		ctx,
-		fmt.Sprintf(`SELECT service_name, operation_name, span_kind FROM "%s" WHERE %s GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`, r.cfg.OperationsTableName, strings.Join(conditions, " AND ")),
-		r.servicesQueryTTL)
+		fmt.Sprintf(`
+SELECT distinct operation_name, span_kind
+FROM "%s"
+WHERE %s`,
+			s.cfg.OperationsTableName,
+			strings.Join(conditions, " AND ")),
+		s.servicesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
 	}
 
-	return result, nil
+	operations := make([]spanstore.Operation, len(result))
+	for i, v := range result {
+		operations[i] = spanstore.Operation{
+			Name:     *v.Data[0].VarCharValue,
+			SpanKind: *v.Data[1].VarCharValue,
+		}
+	}
+
+	return operations, nil
 }
 
 func (r *Reader) FindTraces(ctx context.Context, query *spanstore.TraceQueryParameters) ([]*model.Trace, error) {
