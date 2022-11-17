@@ -16,7 +16,7 @@ type SpanRecord struct {
 	SpanID        string `parquet:"name=span_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
 	OperationName string `parquet:"name=operation_name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
 	SpanKind      string `parquet:"name=span_kind, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	// StartTime must have millisecond (int32) percision to worth with Athena engine version 3.
+	// StartTime must have millisecond (int32) precision to work with Athena engine version 3.
 	StartTime   int32             `parquet:"name=start_time, type=INT32"`
 	Duration    int64             `parquet:"name=duration, type=INT64"`
 	Tags        map[string]string `parquet:"name=tags, type=MAP, convertedtype=MAP, keytype=BYTE_ARRAY, keyconvertedtype=UTF8, valuetype=BYTE_ARRAY, valueconvertedtype=UTF8"`
