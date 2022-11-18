@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/golang/mock/gomock"
@@ -94,72 +93,11 @@ func TestGetServices(t *testing.T) {
 	serviceName := "test"
 
 	mockSvc := mocks.NewMockAthenaAPI(ctrl)
-	mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
-		Return(&athena.ListQueryExecutionsOutput{}, nil)
 
 	mockQueryRunAndResult(mockSvc, [][]string{{serviceName}})
 
 	assert := assert.New(t)
 	ctx := context.TODO()
-
-	reader := NewTestReader(ctx, assert, mockSvc)
-
-	services, err := reader.GetServices(ctx)
-
-	assert.NoError(err)
-	assert.Equal([]string{serviceName}, services)
-}
-
-func TestGetServicesCached(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	serviceName := "test"
-	assert := assert.New(t)
-	ctx := context.TODO()
-
-	validQueryID := "get-services"
-	invalidQueryID := "different"
-
-	mockSvc := mocks.NewMockAthenaAPI(ctrl)
-	mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
-		Return(&athena.ListQueryExecutionsOutput{
-			QueryExecutionIds: []string{invalidQueryID, validQueryID},
-		}, nil)
-
-	mockSvc.EXPECT().BatchGetQueryExecution(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, input *athena.BatchGetQueryExecutionInput, _ ...func(*athena.Options)) (*athena.BatchGetQueryExecutionOutput, error) {
-			assert.Equal([]string{invalidQueryID, validQueryID}, input.QueryExecutionIds)
-
-			return &athena.BatchGetQueryExecutionOutput{
-				QueryExecutions: []types.QueryExecution{
-					{
-						Query:            aws.String("asdas"),
-						QueryExecutionId: aws.String(invalidQueryID),
-						Status: &types.QueryExecutionStatus{
-							SubmissionDateTime: aws.Time(time.Now().UTC()),
-						},
-					},
-					{
-						Query:            aws.String(`SELECT service_name, operation_name, span_kind FROM "jaeger_operations" WHERE`),
-						QueryExecutionId: aws.String(validQueryID),
-						Status: &types.QueryExecutionStatus{
-							SubmissionDateTime: aws.Time(time.Now().UTC()),
-							CompletionDateTime: aws.Time(time.Now().UTC()),
-						},
-					},
-				},
-			}, nil
-		})
-
-	mockSvc.EXPECT().GetQueryResults(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, input *athena.GetQueryResultsInput, _ ...func(*athena.Options)) (*athena.GetQueryResultsOutput, error) {
-			assert.Equal("get-services", *input.QueryExecutionId)
-
-			return &athena.GetQueryResultsOutput{
-				ResultSet: toAthenaResultSet([][]string{{serviceName}}),
-			}, nil
-		})
 
 	reader := NewTestReader(ctx, assert, mockSvc)
 
@@ -175,19 +113,12 @@ func TestGetOperations(t *testing.T) {
 
 	results := [][]string{
 		{
-			"test",
 			"server-op",
 			"server",
 		},
 		{
-			"test",
 			"client-op",
 			"client",
-		},
-		{
-			"different",
-			"server-op",
-			"server",
 		},
 	}
 
@@ -195,8 +126,6 @@ func TestGetOperations(t *testing.T) {
 	ctx := context.TODO()
 
 	mockSvc := mocks.NewMockAthenaAPI(ctrl)
-	mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
-		Return(&athena.ListQueryExecutionsOutput{}, nil)
 
 	mockQueryRunAndResult(mockSvc, results)
 
@@ -213,50 +142,6 @@ func TestGetOperations(t *testing.T) {
 		{
 			Name:     "client-op",
 			SpanKind: "client",
-		},
-	}, operations)
-}
-
-func TestGetOperationsWithSpanKind(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	results := [][]string{
-		{
-			"test",
-			"server-op",
-			"server",
-		},
-		{
-			"test",
-			"client-op",
-			"client",
-		},
-		{
-			"different",
-			"server-op",
-			"server",
-		},
-	}
-
-	assert := assert.New(t)
-	ctx := context.TODO()
-
-	mockSvc := mocks.NewMockAthenaAPI(ctrl)
-	mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
-		Return(&athena.ListQueryExecutionsOutput{}, nil)
-
-	mockQueryRunAndResult(mockSvc, results)
-
-	reader := NewTestReader(ctx, assert, mockSvc)
-
-	operations, err := reader.GetOperations(ctx, spanstore.OperationQueryParameters{ServiceName: "test", SpanKind: "server"})
-
-	assert.NoError(err)
-	assert.Equal([]spanstore.Operation{
-		{
-			Name:     "server-op",
-			SpanKind: "server",
 		},
 	}, operations)
 }
