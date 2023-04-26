@@ -114,6 +114,11 @@ func (s *Reader) GetTrace(ctx context.Context, traceID model.TraceID) (*model.Tr
 
 	spans := make([]*model.Span, len(result))
 	for i, v := range result {
+		if v.Data[0].VarCharValue == nil {
+			s.logger.Warn("Malformed span", "value", v)
+			continue
+		}
+
 		span, err := DecodeSpanPayload(*v.Data[0].VarCharValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unmarshal span: %w", err)
@@ -145,6 +150,10 @@ func (s *Reader) GetServices(ctx context.Context) ([]string, error) {
 
 	serviceNames := make([]string, len(result))
 	for i, v := range result {
+		if v.Data[0].VarCharValue == nil {
+			s.logger.Warn("Malformed spaln", "value", v)
+		}
+
 		serviceName := *v.Data[0].VarCharValue
 		serviceNames[i] = serviceName
 	}
@@ -233,6 +242,11 @@ func (r *Reader) FindTraces(ctx context.Context, query *spanstore.TraceQueryPara
 
 	traceIdSpans := map[string][]*model.Span{}
 	for _, v := range spanResult {
+		if v.Data[0].VarCharValue == nil || v.Data[1].VarCharValue == nil {
+			r.logger.Warn("Malformed span", "value", v)
+			continue
+		}
+
 		traceId := *v.Data[0].VarCharValue
 		span, err := DecodeSpanPayload(*v.Data[1].VarCharValue)
 		if err != nil {
@@ -330,6 +344,11 @@ func (r *Reader) findTraceIDs(ctx context.Context, query *spanstore.TraceQueryPa
 
 	traceIds := make([]string, len(result))
 	for i, v := range result {
+		if v.Data[0].VarCharValue == nil {
+			r.logger.Warn("Malformed span", "value", v)
+			continue
+		}
+
 		traceIds[i] = *v.Data[0].VarCharValue
 	}
 
@@ -371,6 +390,12 @@ func (r *Reader) GetDependencies(ctx context.Context, endTs time.Time, lookback 
 
 	dependencyLinks := make([]model.DependencyLink, len(result))
 	for i, v := range result {
+		for i = 0; i <= 2; i++ {
+			if v.Data[i].VarCharValue == nil {
+				r.logger.Warn("Malformed span", "value", v)
+			}
+		}
+
 		callCount, err := strconv.ParseUint(*v.Data[2].VarCharValue, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse call count: %w", err)
