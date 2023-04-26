@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/service/athena"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go/service/firehose"
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/jaegertracing/jaeger/plugin/storage/grpc/shared"
 	"github.com/jaegertracing/jaeger/storage/dependencystore"
@@ -22,8 +22,15 @@ var (
 	_ io.Closer                        = (*S3Plugin)(nil)
 )
 
-func NewS3Plugin(ctx context.Context, logger hclog.Logger, s3Svc *s3.Client, s3Config config.S3, athenaSvc *athena.Client, athenaConfig config.Athena) (*S3Plugin, error) {
-	spanWriter, err := s3spanstore.NewWriter(ctx, logger, s3Svc, s3Config)
+func NewS3Plugin(
+	ctx context.Context,
+	logger hclog.Logger,
+	firehoseSvc *firehose.Firehose,
+	s3Config config.Firehose,
+	athenaSvc *athena.Client,
+	athenaConfig config.Athena,
+) (*S3Plugin, error) {
+	spanWriter, err := s3spanstore.NewWriter(ctx, logger, firehoseSvc, s3Config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create span writer, %v", err)
 	}
@@ -66,7 +73,6 @@ func (h *S3Plugin) StreamingSpanWriter() spanstore.Writer {
 func (h *S3Plugin) Close() error {
 	g := errgroup.Group{}
 
-	g.Go(h.spanWriter.Close)
 	g.Go(h.spanReader.Close)
 
 	return g.Wait()

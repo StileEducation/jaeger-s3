@@ -34,7 +34,7 @@ func NewTestWriter(ctx context.Context, assert *assert.Assertions, mockSvc *mock
 		JSONFormat: true,
 	})
 
-	writer, err := NewWriter(ctx, logger, mockSvc, config.S3{
+	writer, err := NewWriter(ctx, logger, mockSvc, config.Firehose{
 		BucketName:       "jaeger-spans",
 		SpansPrefix:      "/spans/",
 		OperationsPrefix: "/operations/",

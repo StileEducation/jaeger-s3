@@ -1,14 +1,8 @@
 package config
 
-type S3 struct {
-	BucketName                            string
-	SpansPrefix                           string
-	OperationsPrefix                      string
-	BufferDuration                        string
-	EmptyBucket                           bool
-	OperationsDedupeDuration              string
-	OperationsDedupeRewriteBufferDuration string
-	OperationsDedupeCacheSize             int
+type Firehose struct {
+	SpansDeliveryStreamName      string
+	OperationsDeliveryStreamName string
 }
 
 type Athena struct {
@@ -25,6 +19,6 @@ type Athena struct {
 }
 
 type Configuration struct {
-	S3     S3
-	Athena Athena
+	Firehose Firehose
+	Athena   Athena
 }

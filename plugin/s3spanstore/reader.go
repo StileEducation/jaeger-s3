@@ -62,7 +62,6 @@ func NewReader(ctx context.Context, logger hclog.Logger, svc AthenaAPI, cfg conf
 		maxSpanAge:           maxSpanAge,
 		dependenciesQueryTTL: dependenciesQueryTTL,
 		servicesQueryTTL:     servicesQueryTTL,
-		athenaQueryCache:     NewAthenaQueryCache(logger, svc, cfg.WorkGroup),
 		maxTraceDuration:     maxTraceDuration,
 	}
 
@@ -79,7 +78,6 @@ type Reader struct {
 	maxSpanAge           time.Duration
 	dependenciesQueryTTL time.Duration
 	servicesQueryTTL     time.Duration
-	athenaQueryCache     *AthenaQueryCache
 	dependenciesPrefetch *DependenciesPrefetch
 	maxTraceDuration     time.Duration
 }
@@ -182,6 +180,13 @@ WHERE %s`,
 
 	operations := make([]spanstore.Operation, len(result))
 	for i, v := range result {
+		// Skip over malformed data rather than segfauling and making
+		// the plugin crash.
+		if v.Data[0].VarCharValue == nil || v.Data[1].VarCharValue == nil {
+			s.logger.Warn("Malformed operation record in table", "table", s.cfg.OperationsTableName)
+			continue
+		}
+
 		operations[i] = spanstore.Operation{
 			Name:     *v.Data[0].VarCharValue,
 			SpanKind: *v.Data[1].VarCharValue,

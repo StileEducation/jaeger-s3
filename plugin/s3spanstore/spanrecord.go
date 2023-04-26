@@ -12,25 +12,25 @@ import (
 
 // SpanRecord contains queryable properties from the span and the span as json payload
 type SpanRecord struct {
-	TraceID       string `parquet:"name=trace_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
-	SpanID        string `parquet:"name=span_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
-	OperationName string `parquet:"name=operation_name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
-	SpanKind      string `parquet:"name=span_kind, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	TraceID       string `parquet:"name=trace_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN" json:"trace_id"`
+	SpanID        string `parquet:"name=span_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN" json:"span_id"`
+	OperationName string `parquet:"name=operation_name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" json:"operation_name"`
+	SpanKind      string `parquet:"name=span_kind, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" json:"span_kind"`
 	// StartTime must have millisecond precision to work with Athena engine version 3.
-	StartTime   int64             `parquet:"name=start_time, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
-	Duration    int64             `parquet:"name=duration, type=INT64"`
-	Tags        map[string]string `parquet:"name=tags, type=MAP, convertedtype=MAP, keytype=BYTE_ARRAY, keyconvertedtype=UTF8, valuetype=BYTE_ARRAY, valueconvertedtype=UTF8"`
-	ServiceName string            `parquet:"name=service_name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+	StartTime   int64             `parquet:"name=start_time, type=INT64, convertedtype=TIMESTAMP_MILLIS" json:"start_time"`
+	Duration    int64             `parquet:"name=duration, type=INT64" json:"duration"`
+	Tags        map[string]string `parquet:"name=tags, type=MAP, convertedtype=MAP, keytype=BYTE_ARRAY, keyconvertedtype=UTF8, valuetype=BYTE_ARRAY, valueconvertedtype=UTF8" json:"tags"`
+	ServiceName string            `parquet:"name=service_name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY" json:"service_name"`
 
 	// TODO: Write binary
-	SpanPayload string                 `parquet:"name=span_payload, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
-	References  []SpanRecordReferences `parquet:"name=references"`
+	SpanPayload string                 `parquet:"name=span_payload, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN" json:"span_payload"`
+	References  []SpanRecordReferences `parquet:"name=references" json:"references"`
 }
 
 type SpanRecordReferences struct {
-	TraceID string `parquet:"name=trace_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
-	SpanID  string `parquet:"name=span_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN"`
-	RefType int32  `parquet:"name=ref_type, type=INT32, convertedtype=INT_8"`
+	TraceID string `parquet:"name=trace_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN" json:"trace_id"`
+	SpanID  string `parquet:"name=span_id, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN" json:"span_id"`
+	RefType int32  `parquet:"name=ref_type, type=INT32, convertedtype=INT_8" json:"ref_type"`
 }
 
 func NewSpanRecordReferencesFromSpanReferences(span *model.Span) []SpanRecordReferences {

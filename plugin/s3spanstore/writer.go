@@ -6,114 +6,47 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go/aws/request"
+	"github.com/aws/aws-sdk-go/service/firehose"
 	"github.com/hashicorp/go-hclog"
 	"github.com/jaegertracing/jaeger/model"
 	"github.com/johanneswuerbach/jaeger-s3/plugin/config"
 	"golang.org/x/sync/errgroup"
 )
 
-// mockgen -destination=./plugin/s3spanstore/mocks/mock_s3.go -package=mocks github.com/johanneswuerbach/jaeger-s3/plugin/s3spanstore S3API
-
-type S3API interface {
-	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	UploadPart(context.Context, *s3.UploadPartInput, ...func(*s3.Options)) (*s3.UploadPartOutput, error)
-	CreateMultipartUpload(context.Context, *s3.CreateMultipartUploadInput, ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
-	CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput, ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
-	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
-	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
-	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
-	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+type FirehoseAPI interface {
+	PutRecordWithContext(ctx context.Context, input *firehose.PutRecordInput, opts ...request.Option) (*firehose.PutRecordOutput, error)
 }
 
 type Writer struct {
 	logger hclog.Logger
 
-	spanParquetWriter       IParquetWriter
-	operationsParquetWriter *DedupeParquetWriter
+	spanWriter      *ParquetWriter
+	operationWriter *ParquetWriter
 }
 
-func EmptyBucket(ctx context.Context, svc S3API, bucketName string) error {
-	params := &s3.ListObjectsV2Input{
-		Bucket: aws.String(bucketName),
-	}
-
-	paginator := s3.NewListObjectsV2Paginator(svc, params)
-
-	for paginator.HasMorePages() {
-		output, err := paginator.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("failed fetch page: %w", err)
-		}
-		for _, value := range output.Contents {
-			if _, err := svc.DeleteObject(ctx, &s3.DeleteObjectInput{
-				Bucket: aws.String(bucketName),
-				Key:    value.Key,
-			}); err != nil {
-				return fmt.Errorf("failed to delete object: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-var (
-	defaultBufferDuration                        = time.Second * 60
-	defaultOperationsDedupeDuration              = time.Hour * 12
-	defaultOperationsDedupeRewriteBufferDuration = time.Hour * 1
-)
-
-func NewWriter(ctx context.Context, logger hclog.Logger, svc S3API, s3Config config.S3) (*Writer, error) {
+func NewWriter(ctx context.Context, logger hclog.Logger, svc FirehoseAPI, firehoseConfig config.Firehose) (*Writer, error) {
 	rand.Seed(time.Now().UnixNano())
 
-	bufferDuration, err := parseDurationWithDefault(s3Config.BufferDuration, defaultBufferDuration)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse buffer duration: %w", err)
-	}
-
-	operationsDedupeDuration, err := parseDurationWithDefault(s3Config.OperationsDedupeDuration, defaultOperationsDedupeDuration)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse operations dedupe duration: %w", err)
-	}
-
-	operationsDedupeCacheSize := 10000
-	if s3Config.OperationsDedupeCacheSize > 0 {
-		operationsDedupeCacheSize = s3Config.OperationsDedupeCacheSize
-	}
-
-	operationsDedupeRewriteBufferDuration, err := parseDurationWithDefault(s3Config.OperationsDedupeRewriteBufferDuration, defaultOperationsDedupeRewriteBufferDuration)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse operation dedupe rewrite buffer duration: %w", err)
-	}
-
-	if s3Config.EmptyBucket {
-		if err := EmptyBucket(ctx, svc, s3Config.BucketName); err != nil {
-			return nil, fmt.Errorf("failed to empty s3 bucket: %w", err)
-		}
-	}
-
-	spanParquetWriter, err := NewParquetWriter(ctx, logger, svc, bufferDuration, s3Config.BucketName, s3Config.SpansPrefix, new(SpanRecord))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet writer: %w", err)
-	}
-
-	operationsParquetWriter, err := NewParquetWriter(ctx, logger, svc, bufferDuration, s3Config.BucketName, s3Config.OperationsPrefix, new(OperationRecord))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet writer: %w", err)
-	}
-
-	operationsDedupeParquetWriter, err := NewDedupeParquetWriter(logger, operationsDedupeDuration, operationsDedupeRewriteBufferDuration, operationsDedupeCacheSize, operationsParquetWriter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet writer: %w", err)
-	}
+	operationWriter := NewParquetWriter(
+		ctx,
+		logger,
+		svc,
+		firehoseConfig.OperationsDeliveryStreamName,
+		new(OperationRecord),
+	)
+	spanWriter := NewParquetWriter(
+		ctx,
+		logger,
+		svc,
+		firehoseConfig.SpansDeliveryStreamName,
+		new(SpanRecord),
+	)
 
 	w := &Writer{
-		logger:                  logger,
-		operationsParquetWriter: operationsDedupeParquetWriter,
-		spanParquetWriter:       spanParquetWriter,
+		logger:          logger,
+		operationWriter: operationWriter,
+		spanWriter:      spanWriter,
 	}
 
 	return w, nil
@@ -130,7 +63,8 @@ func (w *Writer) WriteSpan(ctx context.Context, span *model.Span) error {
 			return fmt.Errorf("failed to create operation record: %w", err)
 		}
 
-		if err := w.operationsParquetWriter.Write(gCtx, span.StartTime, span.StartTime, operationRecord); err != nil {
+		w.logger.Debug("Writing operation record", "operation", operationRecord)
+		if err := w.operationWriter.Write(gCtx, operationRecord); err != nil {
 			return fmt.Errorf("failed to write operation item: %w", err)
 		}
 
@@ -138,35 +72,14 @@ func (w *Writer) WriteSpan(ctx context.Context, span *model.Span) error {
 	})
 
 	g.Go(func() error {
+		w.logger.Debug("Writing span record", "span", span)
 		spanRecord, err := NewSpanRecordFromSpan(span)
 		if err != nil {
 			return fmt.Errorf("failed to create span record: %w", err)
 		}
 
-		if err := w.spanParquetWriter.Write(gCtx, span.StartTime, span.StartTime, spanRecord); err != nil {
+		if err := w.spanWriter.Write(gCtx, spanRecord); err != nil {
 			return fmt.Errorf("failed to write span item: %w", err)
-		}
-
-		return nil
-	})
-
-	return g.Wait()
-}
-
-func (w *Writer) Close() error {
-	g := errgroup.Group{}
-
-	g.Go(func() error {
-		if err := w.spanParquetWriter.Close(); err != nil {
-			return fmt.Errorf("failed to close parquet writer: %w", err)
-		}
-
-		return nil
-	})
-
-	g.Go(func() error {
-		if err := w.operationsParquetWriter.Close(); err != nil {
-			return fmt.Errorf("failed to close parquet writer: %w", err)
 		}
 
 		return nil
