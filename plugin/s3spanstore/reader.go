@@ -359,7 +359,7 @@ func (r *Reader) GetDependencies(ctx context.Context, endTs time.Time, lookback 
 			JOIN %s as jaeger ON spans_with_references.ref_trace_id = jaeger.trace_id AND spans_with_references.ref_span_id = jaeger.span_id
 			WHERE %s
 			GROUP BY 1, 2
-	`, r.cfg.SpansTableName, r.cfg.SpansTableName, strings.Join(conditions, " AND ")), r.dependenciesQueryTTL)
+	`, r.cfg.SpansTableName, r.cfg.SpansTableName, strings.Join(conditions, " AND ")), "WITH spans_with_reference", r.dependenciesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
 	}
@@ -379,6 +379,22 @@ func (r *Reader) GetDependencies(ctx context.Context, endTs time.Time, lookback 
 	}
 
 	return dependencyLinks, nil
+}
+
+func (r *Reader) queryAthenaCached(ctx context.Context, queryString string, lookupString string, ttl time.Duration) ([]types.Row, error) {
+	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthenaCached")
+	defer otSpan.Finish()
+
+	queryExecution, err := r.athenaQueryCache.Lookup(ctx, lookupString, ttl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup cached athena query: %w", err)
+	}
+
+	if queryExecution != nil {
+		return r.waitAndFetchQueryResult(ctx, queryExecution)
+	}
+
+	return r.queryAthena(ctx, queryString)
 }
 
 func (r *Reader) queryAthena(ctx context.Context, queryString string) ([]types.Row, error) {
@@ -411,7 +427,7 @@ func (r *Reader) queryAthena(ctx context.Context, queryString string) ([]types.R
 	return r.waitAndFetchQueryResult(ctx, status.QueryExecution)
 }
 
-func (r *Reader) queryAthenaCached(ctx context.Context, queryString string, ttl time.Duration) ([]types.Row, error) {
+func (r *Reader) queryAthenaReused(ctx context.Context, queryString string, ttl time.Duration) ([]types.Row, error) {
 	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthena")
 	defer otSpan.Finish()
 
