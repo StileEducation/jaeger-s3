@@ -1,4 +1,4 @@
-FROM golang:1.19.3 AS base
+FROM golang:1.20.4 AS base
 
 FROM base AS code
 ARG GOARCH=amd64
@@ -17,10 +17,10 @@ RUN git clone --depth=1 --single-branch --branch=v1.32.0 https://github.com/jaeg
 WORKDIR /jaeger
 COPY --from=build /src/s3-plugin /go/bin
 
-FROM jaegertracing/all-in-one:1.39.0 AS jaeger-test
+FROM jaegertracing/all-in-one:1.45.0 AS jaeger-test
 COPY --from=build /src/s3-plugin /go/bin
 
-FROM alpine:3.16.3
+FROM alpine:3.18.0
 
 COPY --from=build /src/s3-plugin /jaeger-s3
 
