@@ -139,6 +139,7 @@ func (s *Reader) GetServices(ctx context.Context) ([]string, error) {
 	result, err := s.queryAthenaCached(
 		ctx,
 		fmt.Sprintf(`SELECT distinct service_name FROM "%s" WHERE %s`, s.cfg.OperationsTableName, strings.Join(conditions, " AND ")),
+        "SELECT distinct service_name",
 		s.servicesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
@@ -174,6 +175,7 @@ FROM "%s"
 WHERE %s`,
 			s.cfg.OperationsTableName,
 			strings.Join(conditions, " AND ")),
+        "SELECT distinct operation_name",
 		s.servicesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
