@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/hashicorp/go-hclog"
@@ -406,46 +405,8 @@ func (r *Reader) queryAthena(ctx context.Context, queryString string) ([]types.R
 		QueryExecutionContext: &types.QueryExecutionContext{
 			Database: &r.cfg.DatabaseName,
 		},
-
 		ResultConfiguration: &types.ResultConfiguration{
 			OutputLocation: &r.cfg.OutputLocation,
-		},
-		WorkGroup: &r.cfg.WorkGroup,
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to start athena query: %w", err)
-	}
-
-	status, err := r.svc.GetQueryExecution(ctx, &athena.GetQueryExecutionInput{
-		QueryExecutionId: output.QueryExecutionId,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get athena query execution: %w", err)
-	}
-
-	return r.waitAndFetchQueryResult(ctx, status.QueryExecution)
-}
-
-func (r *Reader) queryAthenaReused(ctx context.Context, queryString string, ttl time.Duration) ([]types.Row, error) {
-	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthena")
-	defer otSpan.Finish()
-
-	ttlMinutes := int32(ttl / time.Minute)
-	output, err := r.svc.StartQueryExecution(ctx, &athena.StartQueryExecutionInput{
-		QueryString: &queryString,
-		QueryExecutionContext: &types.QueryExecutionContext{
-			Database: &r.cfg.DatabaseName,
-		},
-
-		ResultConfiguration: &types.ResultConfiguration{
-			OutputLocation: &r.cfg.OutputLocation,
-		},
-		ResultReuseConfiguration: &types.ResultReuseConfiguration{
-			ResultReuseByAgeConfiguration: &types.ResultReuseByAgeConfiguration{
-				Enabled:         true,
-				MaxAgeInMinutes: aws.Int32(ttlMinutes),
-			},
 		},
 		WorkGroup: &r.cfg.WorkGroup,
 	})
