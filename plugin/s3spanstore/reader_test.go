@@ -93,6 +93,8 @@ func TestGetServices(t *testing.T) {
 	serviceName := "test"
 
 	mockSvc := mocks.NewMockAthenaAPI(ctrl)
+    mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
+		Return(&athena.ListQueryExecutionsOutput{}, nil)
 
 	mockQueryRunAndResult(mockSvc, [][]string{{serviceName}})
 
@@ -126,6 +128,8 @@ func TestGetOperations(t *testing.T) {
 	ctx := context.TODO()
 
 	mockSvc := mocks.NewMockAthenaAPI(ctrl)
+    mockSvc.EXPECT().ListQueryExecutions(gomock.Any(), gomock.Any()).
+		Return(&athena.ListQueryExecutionsOutput{}, nil)
 
 	mockQueryRunAndResult(mockSvc, results)
 

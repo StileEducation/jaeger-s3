@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/hashicorp/go-hclog"
@@ -140,6 +139,7 @@ func (s *Reader) GetServices(ctx context.Context) ([]string, error) {
 	result, err := s.queryAthenaCached(
 		ctx,
 		fmt.Sprintf(`SELECT distinct service_name FROM "%s" WHERE %s`, s.cfg.OperationsTableName, strings.Join(conditions, " AND ")),
+        "SELECT distinct service_name",
 		s.servicesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
@@ -175,6 +175,7 @@ FROM "%s"
 WHERE %s`,
 			s.cfg.OperationsTableName,
 			strings.Join(conditions, " AND ")),
+        "SELECT distinct operation_name",
 		s.servicesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
@@ -359,7 +360,7 @@ func (r *Reader) GetDependencies(ctx context.Context, endTs time.Time, lookback 
 			JOIN %s as jaeger ON spans_with_references.ref_trace_id = jaeger.trace_id AND spans_with_references.ref_span_id = jaeger.span_id
 			WHERE %s
 			GROUP BY 1, 2
-	`, r.cfg.SpansTableName, r.cfg.SpansTableName, strings.Join(conditions, " AND ")), r.dependenciesQueryTTL)
+	`, r.cfg.SpansTableName, r.cfg.SpansTableName, strings.Join(conditions, " AND ")), "WITH spans_with_reference", r.dependenciesQueryTTL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query athena: %w", err)
 	}
@@ -381,6 +382,22 @@ func (r *Reader) GetDependencies(ctx context.Context, endTs time.Time, lookback 
 	return dependencyLinks, nil
 }
 
+func (r *Reader) queryAthenaCached(ctx context.Context, queryString string, lookupString string, ttl time.Duration) ([]types.Row, error) {
+	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthenaCached")
+	defer otSpan.Finish()
+
+	queryExecution, err := r.athenaQueryCache.Lookup(ctx, lookupString, ttl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup cached athena query: %w", err)
+	}
+
+	if queryExecution != nil {
+		return r.waitAndFetchQueryResult(ctx, queryExecution)
+	}
+
+	return r.queryAthena(ctx, queryString)
+}
+
 func (r *Reader) queryAthena(ctx context.Context, queryString string) ([]types.Row, error) {
 	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthena")
 	defer otSpan.Finish()
@@ -390,46 +407,8 @@ func (r *Reader) queryAthena(ctx context.Context, queryString string) ([]types.R
 		QueryExecutionContext: &types.QueryExecutionContext{
 			Database: &r.cfg.DatabaseName,
 		},
-
 		ResultConfiguration: &types.ResultConfiguration{
 			OutputLocation: &r.cfg.OutputLocation,
-		},
-		WorkGroup: &r.cfg.WorkGroup,
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to start athena query: %w", err)
-	}
-
-	status, err := r.svc.GetQueryExecution(ctx, &athena.GetQueryExecutionInput{
-		QueryExecutionId: output.QueryExecutionId,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get athena query execution: %w", err)
-	}
-
-	return r.waitAndFetchQueryResult(ctx, status.QueryExecution)
-}
-
-func (r *Reader) queryAthenaCached(ctx context.Context, queryString string, ttl time.Duration) ([]types.Row, error) {
-	otSpan, _ := opentracing.StartSpanFromContext(ctx, "queryAthena")
-	defer otSpan.Finish()
-
-	ttlMinutes := int32(ttl / time.Minute)
-	output, err := r.svc.StartQueryExecution(ctx, &athena.StartQueryExecutionInput{
-		QueryString: &queryString,
-		QueryExecutionContext: &types.QueryExecutionContext{
-			Database: &r.cfg.DatabaseName,
-		},
-
-		ResultConfiguration: &types.ResultConfiguration{
-			OutputLocation: &r.cfg.OutputLocation,
-		},
-		ResultReuseConfiguration: &types.ResultReuseConfiguration{
-			ResultReuseByAgeConfiguration: &types.ResultReuseByAgeConfiguration{
-				Enabled:         true,
-				MaxAgeInMinutes: aws.Int32(ttlMinutes),
-			},
 		},
 		WorkGroup: &r.cfg.WorkGroup,
 	})
