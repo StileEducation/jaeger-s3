@@ -120,7 +120,7 @@ func NewWriter(ctx context.Context, logger hclog.Logger, svc S3API, s3Config con
 }
 
 func (w *Writer) WriteSpan(ctx context.Context, span *model.Span) error {
-	// s.logger.Debug("WriteSpan", span)
+	s.logger.Debug("WriteSpan", span)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
