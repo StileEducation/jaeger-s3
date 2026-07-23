@@ -3,6 +3,7 @@ package s3spanstore
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/golang/mock/gomock"
 	"github.com/hashicorp/go-hclog"
+	"github.com/jaegertracing/jaeger/model"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 	"github.com/johanneswuerbach/jaeger-s3/plugin/config"
 	"github.com/johanneswuerbach/jaeger-s3/plugin/s3spanstore/mocks"
@@ -107,6 +109,126 @@ func TestGetServices(t *testing.T) {
 
 	assert.NoError(err)
 	assert.Equal([]string{serviceName}, services)
+}
+
+// mockQueryRunAndResultCapturing behaves like mockQueryRunAndResult but records the
+// SQL of every issued query into the supplied slice in call order.
+func mockQueryRunAndResultCapturing(mockSvc *mocks.MockAthenaAPI, capture *[]string, result [][]string) {
+	queryID := "queryId"
+	now := time.Now()
+
+	mockSvc.EXPECT().StartQueryExecution(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, in *athena.StartQueryExecutionInput, _ ...func(*athena.Options)) (*athena.StartQueryExecutionOutput, error) {
+			*capture = append(*capture, *in.QueryString)
+			return &athena.StartQueryExecutionOutput{QueryExecutionId: &queryID}, nil
+		})
+	mockSvc.EXPECT().GetQueryExecution(gomock.Any(), gomock.Any()).
+		Return(&athena.GetQueryExecutionOutput{
+			QueryExecution: &types.QueryExecution{
+				Status: &types.QueryExecutionStatus{CompletionDateTime: &now},
+			},
+		}, nil)
+	mockSvc.EXPECT().GetQueryResults(gomock.Any(), gomock.Any()).
+		Return(&athena.GetQueryResultsOutput{ResultSet: toAthenaResultSet(result)}, nil)
+}
+
+func encodedTestSpan(t *testing.T) (model.TraceID, string) {
+	t.Helper()
+	span := &model.Span{
+		TraceID:       model.NewTraceID(0, 0xaf0d7a36b1a8eff0),
+		SpanID:        model.NewSpanID(1),
+		OperationName: "test-op",
+		StartTime:     time.Unix(0, 0).UTC(),
+	}
+	payload, err := EncodeSpanPayload(span)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return span.TraceID, payload
+}
+
+func TestGetTrace_FirstTierHit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	assert := assert.New(t)
+	ctx := context.TODO()
+
+	traceID, payload := encodedTestSpan(t)
+
+	mockSvc := mocks.NewMockAthenaAPI(ctrl)
+
+	captured := []string{}
+	mockQueryRunAndResultCapturing(mockSvc, &captured, [][]string{{payload}})
+
+	reader := NewTestReader(ctx, assert, mockSvc)
+	trace, err := reader.GetTrace(ctx, traceID)
+
+	assert.NoError(err)
+	assert.Len(trace.Spans, 1)
+	assert.Len(captured, 1, "should stop after the first tier hits")
+}
+
+func TestGetTrace_FallsThroughTiers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	assert := assert.New(t)
+	ctx := context.TODO()
+
+	traceID, payload := encodedTestSpan(t)
+
+	mockSvc := mocks.NewMockAthenaAPI(ctrl)
+
+	captured := []string{}
+	// Empty result at 6h, empty at 48h, hit at maxSpanAge.
+	// gomock plays sequential EXPECTs in call order.
+	mockQueryRunAndResultCapturing(mockSvc, &captured, nil)
+	mockQueryRunAndResultCapturing(mockSvc, &captured, nil)
+	mockQueryRunAndResultCapturing(mockSvc, &captured, [][]string{{payload}})
+
+	reader := NewTestReader(ctx, assert, mockSvc)
+	trace, err := reader.GetTrace(ctx, traceID)
+
+	assert.NoError(err)
+	assert.Len(trace.Spans, 1)
+	assert.Len(captured, 3, "should try each tier in turn")
+
+	// Successive tiers should scan strictly wider datehour ranges. The
+	// lower bound moves earlier each time; upper bound stays roughly now.
+	extractLower := func(sql string) string {
+		i := strings.Index(sql, "BETWEEN '")
+		if i < 0 {
+			t.Fatalf("no BETWEEN clause in %q", sql)
+		}
+		rest := sql[i+len("BETWEEN '"):]
+		j := strings.Index(rest, "'")
+		return rest[:j]
+	}
+	l0, l1, l2 := extractLower(captured[0]), extractLower(captured[1]), extractLower(captured[2])
+	assert.True(l0 > l1, "6h lower bound (%s) should be later than 48h lower bound (%s)", l0, l1)
+	assert.True(l1 > l2, "48h lower bound (%s) should be later than maxSpanAge lower bound (%s)", l1, l2)
+}
+
+func TestGetTrace_MissAllTiers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	assert := assert.New(t)
+	ctx := context.TODO()
+
+	mockSvc := mocks.NewMockAthenaAPI(ctrl)
+
+	captured := []string{}
+	mockQueryRunAndResultCapturing(mockSvc, &captured, nil)
+	mockQueryRunAndResultCapturing(mockSvc, &captured, nil)
+	mockQueryRunAndResultCapturing(mockSvc, &captured, nil)
+
+	reader := NewTestReader(ctx, assert, mockSvc)
+	_, err := reader.GetTrace(ctx, model.NewTraceID(0, 0xdeadbeef))
+
+	assert.ErrorIs(err, spanstore.ErrTraceNotFound)
+	assert.Len(captured, 3)
 }
 
 func TestGetOperations(t *testing.T) {
