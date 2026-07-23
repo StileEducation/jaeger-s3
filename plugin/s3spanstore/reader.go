@@ -95,36 +95,56 @@ func (r *Reader) DefaultMinTime() time.Time {
 	return r.DefaultMaxTime().Add(-r.maxSpanAge)
 }
 
+// Progressive Athena scan windows for GetTrace. Widening tiers are tried in
+// order until a match is found; misses fall through to a final scan bounded by
+// maxSpanAge. Almost every by-id lookup targets a recent trace, so keep the
+// smallest tier tight.
+var getTraceLookbackTiers = []time.Duration{
+	6 * time.Hour,
+	48 * time.Hour,
+}
+
 func (s *Reader) GetTrace(ctx context.Context, traceID model.TraceID) (*model.Trace, error) {
 	s.logger.Trace("GetTrace", traceID.String())
 	otSpan, _ := opentracing.StartSpanFromContext(ctx, "GetTrace")
 	defer otSpan.Finish()
 
-	conditions := []string{
-		fmt.Sprintf(`datehour BETWEEN '%s' AND '%s'`, s.DefaultMinTime().Format(PARTION_FORMAT), s.DefaultMaxTime().Format(PARTION_FORMAT)),
-		fmt.Sprintf(`trace_id = '%s'`, traceID),
-	}
+	now := s.DefaultMaxTime()
 
-	result, err := s.queryAthena(ctx, fmt.Sprintf(`SELECT DISTINCT span_payload FROM "%s" WHERE %s`, s.cfg.SpansTableName, strings.Join(conditions, " AND ")))
-	if err != nil {
-		return nil, fmt.Errorf("failed to query athena: %w", err)
-	}
-	if len(result) == 0 {
-		return nil, spanstore.ErrTraceNotFound
-	}
+	lookbacks := append([]time.Duration{}, getTraceLookbackTiers...)
+	lookbacks = append(lookbacks, s.maxSpanAge)
 
-	spans := make([]*model.Span, len(result))
-	for i, v := range result {
-		span, err := DecodeSpanPayload(*v.Data[0].VarCharValue)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal span: %w", err)
+	for _, lookback := range lookbacks {
+		conditions := []string{
+			fmt.Sprintf(`datehour BETWEEN '%s' AND '%s'`, now.Add(-lookback).Format(PARTION_FORMAT), now.Format(PARTION_FORMAT)),
+			fmt.Sprintf(`trace_id = '%s'`, traceID),
 		}
-		spans[i] = span
+
+		result, err := s.queryAthena(ctx, fmt.Sprintf(`SELECT DISTINCT span_payload FROM "%s" WHERE %s`, s.cfg.SpansTableName, strings.Join(conditions, " AND ")))
+		if err != nil {
+			return nil, fmt.Errorf("failed to query athena: %w", err)
+		}
+		if len(result) == 0 {
+			continue
+		}
+
+		otSpan.SetTag("getTrace.hit_lookback", lookback.String())
+
+		spans := make([]*model.Span, len(result))
+		for i, v := range result {
+			span, err := DecodeSpanPayload(*v.Data[0].VarCharValue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to unmarshal span: %w", err)
+			}
+			spans[i] = span
+		}
+
+		return &model.Trace{
+			Spans: spans,
+		}, nil
 	}
 
-	return &model.Trace{
-		Spans: spans,
-	}, nil
+	return nil, spanstore.ErrTraceNotFound
 }
 
 func (s *Reader) GetServices(ctx context.Context) ([]string, error) {
